@@ -189,7 +189,7 @@ test_that("compute_item_baseline handles multiple items", {
 
 test_that("map_item_baseline performs basic mapping", {
   item_id_eval <- c(1, 2, 2, 3, 3)
-  baseline_probs <- list("1" = 0.9, "2" = 0.4, "3" = 0.5)
+  baseline_probs <- c("1" = 0.9, "2" = 0.4, "3" = 0.5)
   global_mean <- 0.6
 
   result <- map_item_baseline(item_id_eval, baseline_probs, global_mean)
@@ -200,7 +200,7 @@ test_that("map_item_baseline performs basic mapping", {
 
 test_that("map_item_baseline falls back to global mean for unknown items", {
   item_id_eval <- c(1, 2, 99)  # 99 not in lookup
-  baseline_probs <- list("1" = 0.9, "2" = 0.4)
+  baseline_probs <- c("1" = 0.9, "2" = 0.4)
   global_mean <- 0.6
 
   result <- map_item_baseline(item_id_eval, baseline_probs, global_mean)
@@ -210,7 +210,7 @@ test_that("map_item_baseline falls back to global mean for unknown items", {
 
 test_that("map_item_baseline handles empty input", {
   item_id_eval <- integer(0)
-  baseline_probs <- list("1" = 0.9)
+  baseline_probs <- c("1" = 0.9)
   global_mean <- 0.6
 
   result <- map_item_baseline(item_id_eval, baseline_probs, global_mean)
@@ -220,7 +220,7 @@ test_that("map_item_baseline handles empty input", {
 
 test_that("map_item_baseline handles empty baseline_probs", {
   item_id_eval <- c(1, 2, 3)
-  baseline_probs <- list()
+  baseline_probs <- numeric(0)
   global_mean <- 0.6
 
   result <- map_item_baseline(item_id_eval, baseline_probs, global_mean)
@@ -232,7 +232,7 @@ test_that("map_item_baseline handles empty baseline_probs", {
 test_that("map_item_baseline clips values", {
   eps <- 0.01
   item_id_eval <- c(1, 2)
-  baseline_probs <- list("1" = 0.0, "2" = 1.0)
+  baseline_probs <- c("1" = 0.0, "2" = 1.0)
   global_mean <- 0.5
 
   result <- map_item_baseline(item_id_eval, baseline_probs, global_mean, eps = eps)
@@ -544,7 +544,7 @@ test_that("calibration output is returned when requested", {
   expect_type(result$calibration$ece, "double")
 })
 
-test_that("calibration not included by default", {
+test_that("calibration key is present but NULL when not requested", {
   y_pred <- c(0.8, 0.6, 0.7)
   y_eval <- c(1, 0, 1)
   item_id_eval <- c(1, 2, 1)
@@ -562,7 +562,10 @@ test_that("calibration not included by default", {
     calibration = FALSE
   )
 
-  expect_false("calibration" %in% names(result))
+  # Mirrors the Python return shape: the key is always present, valued NULL
+  # when calibration was not requested.
+  expect_true("calibration" %in% names(result))
+  expect_null(result$calibration)
 })
 
 # ==============================================================================
@@ -619,9 +622,7 @@ test_that("FIG-V denominator uses Y items with train baselines", {
     use_shrinkage = FALSE
   )
 
-  binary_entropy <- function(p) {
-    -(p * log(p) + (1 - p) * log(1 - p))
-  }
+  # Uses the package's binary_entropy (exposed via pkgload::load_all).
   entropy_y <- (2 * binary_entropy(0.75) + 8 * binary_entropy(0.5)) / 10
   expected <- 1 - log(2) / entropy_y
 
@@ -1008,4 +1009,104 @@ test_that("FIG-C student_ids and fig_c_by_student are in consistent order", {
   expect_equal(result$fig_c_by_student[["1"]], expected_s1, tolerance = 1e-10)
   expect_equal(result$fig_c_by_student[["2"]], expected_s2, tolerance = 1e-10)
   expect_equal(result$fig_c_by_student[["3"]], expected_s3, tolerance = 1e-10)
+})
+
+# ==============================================================================
+# Tests for FIG-V per-student outputs (parity with FIG-C and the Python version)
+# ==============================================================================
+
+test_that("FIG-V returns per-student values with consistent student_ids", {
+  # Students appear out of order (3, 1, 2) to exercise the sorting in tapply().
+  y_pred          <- c(0.9, 0.2, 0.8, 0.1, 0.7, 0.3)
+  y_eval          <- c(1,   0,   1,   0,   1,   0  )
+  item_id_eval    <- c(1,   1,   2,   2,   1,   2  )
+  student_id_eval <- c(3,   1,   2,   3,   1,   2  )
+  y_train         <- c(1, 0, 1, 0)
+  item_id_train   <- c(1, 1, 2, 2)
+
+  result <- fractional_information_gain_validation(
+    y_pred_eval     = y_pred,
+    y_eval          = y_eval,
+    item_id_eval    = item_id_eval,
+    student_id_eval = student_id_eval,
+    y_train         = y_train,
+    item_id_train   = item_id_train,
+    use_shrinkage   = FALSE
+  )
+
+  # The per-student outputs are present and internally consistent.
+  expect_true("fig_v_by_student" %in% names(result))
+  expect_true("student_ids" %in% names(result))
+  expect_equal(
+    as.character(result$student_ids),
+    names(result$fig_v_by_student)
+  )
+  # Student-weighted fig_v is the mean of the per-student values.
+  expect_equal(result$fig_v, mean(result$fig_v_by_student))
+
+  # With use_shrinkage = FALSE both items have baseline 0.5, so every
+  # observation's baseline entropy is log(2). Verify per-student values by hand.
+  bce <- function(y, p) -(y * log(p) + (1 - y) * log(1 - p))
+  log2_val <- log(2)
+  expected_s1 <- 1 - (bce(0, 0.2) + bce(1, 0.7)) / (2 * log2_val)
+  expected_s2 <- 1 - (bce(1, 0.8) + bce(0, 0.3)) / (2 * log2_val)
+  expected_s3 <- 1 - (bce(1, 0.9) + bce(0, 0.1)) / (2 * log2_val)
+
+  expect_equal(result$fig_v_by_student[["1"]], expected_s1, tolerance = 1e-10)
+  expect_equal(result$fig_v_by_student[["2"]], expected_s2, tolerance = 1e-10)
+  expect_equal(result$fig_v_by_student[["3"]], expected_s3, tolerance = 1e-10)
+})
+
+# ==============================================================================
+# Tests for input validation: non-integer IDs and empty inputs
+# ==============================================================================
+
+test_that("non-integer IDs raise a clear error", {
+  base_args <- list(
+    y_pred_eval = c(0.8, 0.6),
+    y_eval = c(1, 0),
+    item_id_eval = c(1, 2),
+    student_id_eval = c(1, 1),
+    y_train = c(1, 0),
+    item_id_train = c(1, 2)
+  )
+
+  # Fractional item IDs would be silently truncated by as.integer(); error instead.
+  args <- base_args
+  args$item_id_eval <- c(1.5, 2.5)
+  expect_error(
+    do.call(fractional_information_gain_validation, args), "integer"
+  )
+
+  # Non-numeric student IDs would become NA; error instead.
+  args <- base_args
+  args$student_id_eval <- c("a", "b")
+  expect_error(
+    do.call(fractional_information_gain_validation, args), "integer"
+  )
+})
+
+test_that("empty inputs raise an error (FIG-V and FIG-C)", {
+  expect_error(
+    fractional_information_gain_validation(
+      y_pred_eval = numeric(0),
+      y_eval = numeric(0),
+      item_id_eval = integer(0),
+      student_id_eval = integer(0),
+      y_train = c(1, 0),
+      item_id_train = c(1, 2)
+    ),
+    "empty"
+  )
+
+  expect_error(
+    fractional_information_gain_confidence(
+      y_pred_eval = numeric(0),
+      item_id_eval = integer(0),
+      student_id_eval = integer(0),
+      y_train = c(1, 0),
+      item_id_train = c(1, 2)
+    ),
+    "empty"
+  )
 })
