@@ -1,0 +1,135 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[project]
+name = "fractional-information-gain"
+version = "0.1.0"
+description = "Library for computing Fractional Information Gain metrics."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.12, <3.15"
+dependencies = [
+    "numpy~=2.4",
+]
+
+[project.optional-dependencies]
+torch = [
+    "torch~=2.10",
+]
+
+[dependency-groups]
+dev = [
+    "pre-commit~=4.5.1",
+    "pyright~=1.1.408",
+    "pytest~=9.0.2",
+    "pytest-cov~=6.3.0",
+    "ruff~=0.15.2",
+]
+docs = [
+    "mkdocs~=1.6.1",
+    "mkdocs-material~=9.7.6",
+    "mkdocstrings[python]~=1.0.3",
+]
+
+
+[tool.ruff.format]
+exclude = ["*.ipynb"]
+
+[tool.ruff.lint]
+exclude = ["*.ipynb", "experiments/*"]
+# The philosophy for our linting rules is opt-out: By default we check everything, and
+# every omission needs justification. Any entries in the `ignore` list should both
+# 1) Describe what the rule does.
+# 2) Why we don't want it.
+# This is not trying to stop you from disabling counter-productive rules, but to force
+# us to make deliberate decisions and keep our linting rules as strict as is reasonable.
+# Note that the ruff docs have more details on each rule.
+select = ["ALL"]
+ignore = [
+    # D213: multi-line summary on the second line — conflicts with D212 (summary on the
+    # first line), which is our standard. The two rules are mutually exclusive; exactly
+    # one must be ignored.
+    "D213",
+    # D203: blank line before class docstring — conflicts with D211 (no blank line before
+    # class docstring), which is our standard. The two rules are mutually exclusive; exactly
+    # one must be ignored.
+    "D203",
+    # D413: blank line after the last section (Returns, Attributes, etc.). This is
+    # purely aesthetic and adds visual noise without practical benefit.
+    "D413",
+    # Forbid assert usage. We currently use a lot of asserts. We should eventually move to
+    # more informative errors, but for now this rule is too noisy. TODO(mhauru): Enabled
+    # this later.
+    "S101",
+    # trailing commas — conflicts with ruff formatter, which recommends disabling this rule
+    "COM812",
+    # TODO comment strictness (author, issue link, fixme warnings). We are not doing TODO
+    # notes with this level of rigor.
+    "TD002",
+    "TD003",
+    "FIX002",
+    # McCabe complexity too high. McCabe complexity isn't a very helpful metric.
+    "C901",
+    # Forbid use of string literals and f-strings in error messages. It claims to keep backtraces
+    # prettier, but it's not worth the cost of adding trivial variables in the code.
+    "EM",
+    # Forbid the use of boolean positional arguments. We don't agree that this is a bad thing to do.
+    "FBT",
+    # Forbid having code folders that don't have an __init__.py. Think this can be desirable
+    # for code that is not meant to be imported.
+    "INP001",
+    # These forbid having "too many" of various things: Too many arguments in a function, too many
+    # statemens in a function body, etc. The principle is good, but having hard-coded limits like
+    # these is too rigid.
+    "PLR0904",
+    "PLR0911",
+    "PLR0912",
+    "PLR0913",
+    "PLR0914",
+    "PLR0915",
+    "PLR0916",
+    "PLR0917",
+    # Tries to check that subprocess.run isn't called on input that isn't validated. Too prone
+    # to false positives to be useful.
+    "S603",
+    # Forbids long error messages, saying they should be part of the exception class instead.
+    # Overengineering for our needs.
+    "TRY003",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Some rules make sense in the library code, but not in our tests:
+# * PLR2005: Forbid comparisons to magic constant values. Magic-value comparisons are ubiquitous in test
+# assertions, and that's okay.
+# * NPY002: Forbids using the old-style global random number generator in NumPy. This may be worth fixing
+# eventually, but in the tests the harm of this is minimal, and it would add boilerplate code.
+# * S607: Forbids calling subprocess.run with a partial executable path, like just calling `R`.
+# Meant for security, overkill in our case when used in tests.
+# * D: Docstring rules. Test functions are not public API, are not introspected, and
+# enforcing docstring rigor there adds noise for little gain.
+"tests/**" = ["PLR2004", "NPY002", "S607", "D"]
+# T201 forbids print statements. They are fine in a benchmark script.
+"benchmarks/**" = ["T201"]
+
+[tool.coverage.run]
+source = ["fig"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_empty = true
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.",
+    "if TYPE_CHECKING:",
+]
+
+[tool.pyright]
+include = ["src", "tests"]
+pythonVersion = "3.14"
+typeCheckingMode = "strict"

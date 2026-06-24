@@ -1,0 +1,79 @@
+site_name: Fractional Information Gain
+site_url: https://renaissancephilanthropy.github.io/fractional-information-gain/
+site_description: >-
+  FIG metrics for evaluating knowledge-tracing models on binary response tasks.
+repo_url: https://github.com/RenaissancePhilanthropy/fractional-information-gain
+repo_name: RenaissancePhilanthropy/fractional-information-gain
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - content.code.copy
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.highlight
+    - toc.follow
+
+exclude_docs: |
+  plans/
+
+plugins:
+  - search
+  - mkdocstrings:
+      default_handler: python
+      handlers:
+        python:
+          options:
+            docstring_style: numpy
+            show_source: false
+            show_root_heading: true
+            show_root_full_path: false
+            show_symbol_type_heading: true
+            show_symbol_type_toc: true
+            members_order: source
+            separate_signature: true
+            signature_crossrefs: true
+            show_signature_annotations: true
+
+markdown_extensions:
+  - admonition
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.arithmatex:
+      generic: true
+  - pymdownx.tabbed:
+      alternate_style: true
+  - toc:
+      permalink: true
+
+extra_javascript:
+  - javascripts/mathjax.js
+  - https://unpkg.com/mathjax@3/es5/tex-mml-chtml.js
+
+nav:
+  - Home: index.md
+  - Installation: installation.md
+  - Getting Started: getting-started.md
+  - Concepts: concepts.md
+  - API Reference:
+    - fig (NumPy): api/fig.md
+    - fig.fig_torch (PyTorch): api/fig_torch.md
+  - R Package: r-package.md
+  - Changelog: changelog.md

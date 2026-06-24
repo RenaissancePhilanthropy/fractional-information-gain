@@ -1,0 +1,101 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - name: Install Python 3.14
+        run: uv python install 3.14
+
+      - name: Install dependencies
+        run: uv sync --dev
+
+      - name: Lint
+        run: uv run ruff check .
+
+  type-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - name: Install Python 3.14
+        run: uv python install 3.14
+
+      - name: Install dependencies
+        run: uv sync --dev --extra torch
+
+      - name: Type check
+        run: uv run pyright
+
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - name: Install Python 3.14
+        run: uv python install 3.14
+
+      - name: Install dependencies
+        run: uv sync --dev
+
+      - name: Format check
+        run: uv run ruff format . --check
+
+  test-python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - name: Install Python 3.14
+        run: uv python install 3.14
+
+      - name: Install dependencies
+        run: uv sync --dev --extra torch
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: 'release'
+
+      - name: Install R dependencies
+        run: Rscript -e "install.packages(c('testthat', 'pkgload', 'jsonlite'), repos='https://cloud.r-project.org')"
+
+      - name: Test (Python)
+        run: uv run pytest -v --cov --cov-report=term-missing tests/
+
+  test-r:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: 'release'
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libuv1-dev
+
+      - name: Install R dependencies
+        run: Rscript -e "install.packages(c('testthat', 'pkgload', 'jsonlite'), repos='https://cloud.r-project.org')"
+
+      - name: Test (R)
+        run: Rscript -e "pkgload::load_all('.'); testthat::test_dir('tests/testthat')"
+        working-directory: r

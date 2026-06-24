@@ -1,0 +1,42 @@
+repos:
+# Some basic hooks for pre-commit's own repository.
+- repo: https://github.com/pre-commit/pre-commit-hooks
+  rev: v6.0.0
+  hooks:
+    # Prevent giant files from being committed.
+    - id: check-added-large-files
+    # Check YAML, JSON, and TOML files are valid syntax.
+    - id: check-yaml
+    - id: check-json
+    - id: check-toml
+    # Check for files that contain merge conflict strings.
+    - id: check-merge-conflict
+    # Check for the existence of private keys.
+    - id: detect-private-key
+    # Make sure files end in a newline and only a newline.
+    - id: end-of-file-fixer
+    # Check mixed line ending characters. You'll need to fix things manually, this just complains.
+    - id: mixed-line-ending
+      args: [--fix=no]
+    # Trim trailing whitespace.
+    - id: trailing-whitespace
+
+# Ruff for formatting and linting Python code
+- repo: https://github.com/astral-sh/ruff-pre-commit
+  rev: v0.15.2
+  hooks:
+    - id: ruff-check
+    - id: ruff-format
+
+# Pyright for static type checking of Python code.
+# Uses a local hook because pyright needs the project's installed dependencies
+# (numpy, torch) for type resolution. The remote pyright-python hook runs in an
+# isolated env without them.
+- repo: local
+  hooks:
+  - id: pyright
+    name: pyright
+    entry: uv run pyright
+    language: system
+    types: [python]
+    pass_filenames: false
