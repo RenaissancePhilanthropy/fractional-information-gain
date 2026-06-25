@@ -26,6 +26,18 @@ baselines (success rates):
 Both metrics are reported as observation-weighted (pooled) and student-weighted
 (macro-average) variants.
 
+## Installation
+
+```bash
+pip install fractional-information-gain
+```
+
+The PyTorch (differentiable) implementation is an optional extra:
+
+```bash
+pip install "fractional-information-gain[torch]"
+```
+
 ## Quick example
 
 The package is imported as `fig`:
@@ -85,3 +97,16 @@ To build the docs locally:
 uv sync --dev --extra docs --extra torch
 uv run mkdocs serve
 ```
+
+## Releasing
+
+Releases are published to PyPI by the `.github/workflows/publish.yml` workflow using
+[PyPI Trusted Publishing](https://docs.pypi.org/trusted-publishers/) (OIDC) — no API
+token is stored. One-time setup is required before the first release: register a
+"pending publisher" on PyPI (and TestPyPI for dry runs) and create the matching GitHub
+Environments; the exact values are documented in the header of `publish.yml`.
+
+To release: bump `version` in `pyproject.toml`, then publish a GitHub Release tagged
+`vX.Y.Z`. The workflow builds the sdist/wheel and uploads them to PyPI. Running the
+workflow manually (Actions → Publish → Run workflow) instead uploads to TestPyPI for a
+dry run.

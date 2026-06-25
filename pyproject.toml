@@ -5,17 +5,35 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+fig = ["py.typed"]
+
 [project]
 name = "fractional-information-gain"
-version = "0.1.0"
+version = "1.0.0"
 description = "Library for computing Fractional Information Gain metrics."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.12, <3.15"
+authors = [
+    { name = "Thomas Christie" },
+    { name = "Markus Hauru" },
+    { name = "Anna Rafferty" },
+]
+classifiers = [
+    "Programming Language :: Python :: 3 :: Only",
+    "Typing :: Typed",
+]
 dependencies = [
     "numpy~=2.4",
 ]
+
+[project.urls]
+Homepage = "https://github.com/RenaissancePhilanthropy/fractional-information-gain"
+Documentation = "https://renaissancephilanthropy.github.io/fractional-information-gain/"
+Repository = "https://github.com/RenaissancePhilanthropy/fractional-information-gain"
+Issues = "https://github.com/RenaissancePhilanthropy/fractional-information-gain/issues"
 
 [project.optional-dependencies]
 torch = [
