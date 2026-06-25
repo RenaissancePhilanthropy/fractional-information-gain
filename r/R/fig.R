@@ -9,34 +9,30 @@
 #'
 #' @author Tom DHF
 
-#' Coerce an identifier vector to integers, erroring on non-integer values
+#' Validate an identifier vector
 #'
-#' Item and student IDs are required to be integer-valued. This converts the
-#' input to integers and raises a clear error if any value is missing,
-#' non-numeric, or fractional, rather than silently truncating (as.integer())
-#' or coercing to NA.
+#' Item and student identifiers may be of any atomic type (integer, numeric, or
+#' character) or a factor (coerced to character). Missing values are rejected;
+#' otherwise the vector is returned unchanged, preserving its type so that
+#' student IDs round-trip to the output in their original form.
 #'
-#' @param x Identifier vector (integer, numeric, or character)
+#' @param x Identifier vector
 #' @param arg_name Name of the argument, used in the error message
 #'
-#' @return Integer vector
+#' @return The identifier vector, with factors coerced to character
 #'
 #' @keywords internal
-coerce_integer_ids <- function(x, arg_name) {
+validate_ids <- function(x, arg_name) {
   if (is.factor(x)) {
     x <- as.character(x)
   }
-  xi <- suppressWarnings(as.integer(x))
-  if (any(is.na(xi)) || (is.numeric(x) && any(x != xi))) {
-    stop(sprintf(
-      paste0(
-        "%s must contain only integer-valued IDs ",
-        "(no NA, fractional, or non-numeric values)"
-      ),
-      arg_name
-    ))
+  if (!is.atomic(x)) {
+    stop(sprintf("%s must be an atomic vector of identifiers", arg_name))
   }
-  xi
+  if (anyNA(x)) {
+    stop(sprintf("%s must not contain NA", arg_name))
+  }
+  x
 }
 
 #' Validate and Prepare Eval Inputs
@@ -49,10 +45,13 @@ coerce_integer_ids <- function(x, arg_name) {
 #' @param y_pred_eval Numeric vector of predicted probabilities (0 to 1)
 #' @param y_eval Numeric vector of eval ground truth (0=incorrect, 1=correct),
 #'   or NULL (the default) for FIG-C
-#' @param item_id_eval Integer vector of item IDs for eval
-#' @param student_id_eval Integer vector of student IDs for eval
+#' @param item_id_eval Vector of item identifiers for eval (integer, numeric,
+#'   character, or factor)
+#' @param student_id_eval Vector of student identifiers for eval (integer,
+#'   numeric, character, or factor)
 #' @param y_train Numeric vector of training ground truth (0=incorrect, 1=correct)
-#' @param item_id_train Integer vector of item IDs for training
+#' @param item_id_train Vector of item identifiers for training (integer,
+#'   numeric, character, or factor)
 #' @param eps Small constant for clipping probabilities (default: 1e-12)
 #'
 #' @return A list of the validated, prepared vectors. Contains \code{y_eval}
@@ -64,10 +63,10 @@ validate_and_prepare_inputs <- function(y_pred_eval, y_eval = NULL, item_id_eval
                                          eps = 1e-12) {
   # Convert to numeric vectors / integer IDs.
   y_pred_eval <- as.numeric(y_pred_eval)
-  item_id_eval <- coerce_integer_ids(item_id_eval, "item_id_eval")
-  student_id_eval <- coerce_integer_ids(student_id_eval, "student_id_eval")
+  item_id_eval <- validate_ids(item_id_eval, "item_id_eval")
+  student_id_eval <- validate_ids(student_id_eval, "student_id_eval")
   y_train <- as.numeric(y_train)
-  item_id_train <- coerce_integer_ids(item_id_train, "item_id_train")
+  item_id_train <- validate_ids(item_id_train, "item_id_train")
 
   # The number of eval observations is defined by the predictions.
   n_eval <- length(y_pred_eval)
@@ -149,7 +148,8 @@ validate_and_prepare_inputs <- function(y_pred_eval, y_eval = NULL, item_id_eval
 #' optional Empirical Bayes shrinkage.
 #'
 #' @param y_train Numeric vector of binary training outcomes (0 or 1)
-#' @param item_id_train Integer vector of item IDs for training data
+#' @param item_id_train Vector of item identifiers for training data (integer,
+#'   numeric, character, or factor)
 #' @param use_shrinkage Logical, whether to apply EB shrinkage (default: TRUE)
 #' @param alpha Prior pseudo-count for successes in EB shrinkage (default: 2.0)
 #' @param beta Prior pseudo-count for failures in EB shrinkage (default: 2.0)
@@ -190,7 +190,8 @@ compute_item_baseline <- function(y_train, item_id_train,
 #'
 #' Creates a vector of baseline probabilities for evaluation items.
 #'
-#' @param item_id_eval Integer vector of item IDs for evaluation data
+#' @param item_id_eval Vector of item identifiers for evaluation data (integer,
+#'   numeric, character, or factor)
 #' @param baseline_probs Named numeric vector mapping item_id (as character) to
 #'   its baseline probability
 #' @param global_mean Fallback value for items not in lookup
@@ -296,7 +297,8 @@ binary_entropy <- function(p) {
 #' @param numerator Numeric vector of per-observation numerators (entropy for
 #'   FIG-C, cross-entropy for FIG-V)
 #' @param entropy_baseline Numeric vector of per-observation baseline entropies
-#' @param student_id_eval Integer vector of student IDs for eval observations
+#' @param student_id_eval Vector of student identifiers for eval observations
+#'   (integer, numeric, character, or factor)
 #' @param metric_name Name used in warning messages, e.g. "FIG-C" or "FIG-V"
 #'
 #' @return A list with:
@@ -311,9 +313,12 @@ compute_fig <- function(numerator, entropy_baseline, student_id_eval,
   fig_pooled <- 1 - sum(numerator) / sum(entropy_baseline)
 
   # Student-weighted: per-student ratio of sums, then averaged across students.
-  # tapply() returns a named vector indexed by sorted unique student IDs.
-  student_numerator_sum <- tapply(numerator, student_id_eval, sum)
-  student_baseline_sum <- tapply(entropy_baseline, student_id_eval, sum)
+  # Group by an explicit factor whose level order is the (type-preserved)
+  # student_ids, so fig_by_student aligns with student_ids by construction.
+  student_ids <- sort(unique(student_id_eval))
+  student_f <- factor(student_id_eval, levels = as.character(student_ids))
+  student_numerator_sum <- tapply(numerator, student_f, sum)
+  student_baseline_sum <- tapply(entropy_baseline, student_f, sum)
   fig_by_student <- 1 - (student_numerator_sum / student_baseline_sum)
   fig <- mean(fig_by_student)
 
@@ -334,7 +339,9 @@ compute_fig <- function(numerator, entropy_baseline, student_id_eval,
   list(
     fig_pooled = fig_pooled,
     fig = fig,
-    fig_by_student = fig_by_student
+    fig_by_student = fig_by_student,
+    # Original type, sorted; aligns with fig_by_student by construction (above).
+    student_ids = student_ids
   )
 }
 
@@ -353,10 +360,13 @@ compute_fig <- function(numerator, entropy_baseline, student_id_eval,
 #'   H_M(Y|X) = sum of binary entropies using model predictions (remaining uncertainty)
 #'
 #' @param y_pred_eval Numeric vector of predicted probabilities (0 to 1)
-#' @param item_id_eval Integer vector of item identifiers for eval observations
-#' @param student_id_eval Integer vector of student identifiers for eval observations
+#' @param item_id_eval Vector of item identifiers for eval observations
+#'   (integer, numeric, character, or factor)
+#' @param student_id_eval Vector of student identifiers for eval observations
+#'   (integer, numeric, character, or factor)
 #' @param y_train Numeric vector of ground truth on train split (0=incorrect, 1=correct)
-#' @param item_id_train Integer vector of item identifiers for train observations
+#' @param item_id_train Vector of item identifiers for train observations
+#'   (integer, numeric, character, or factor)
 #' @param eps Small constant for clipping probabilities (default: 1e-12)
 #' @param use_shrinkage Logical, if TRUE apply EB shrinkage to item baselines (default: TRUE)
 #' @param alpha Prior pseudo-count for successes in EB shrinkage (default: 2.0)
@@ -366,7 +376,7 @@ compute_fig <- function(numerator, entropy_baseline, student_id_eval,
 #'   - fig_c_pooled: Observation-weighted FIG-C (scalar)
 #'   - fig_c: Student-weighted FIG-C (scalar)
 #'   - fig_c_by_student: Per-student FIG-C values (named numeric vector)
-#'   - student_ids: Unique student IDs in sorted order (integer vector)
+#'   - student_ids: Unique student IDs in sorted order, in their input type
 #'
 #' @details
 #' FIG-C is based purely on model confidence (entropy), not accuracy.
@@ -451,7 +461,7 @@ fractional_information_gain_confidence <- function(
     fig_c_pooled = fig_result$fig_pooled,
     fig_c = fig_result$fig,
     fig_c_by_student = fig_result$fig_by_student,
-    student_ids = as.integer(names(fig_result$fig_by_student))
+    student_ids = fig_result$student_ids
   )
 }
 
@@ -468,11 +478,14 @@ fractional_information_gain_confidence <- function(
 #'
 #' @param y_pred_eval Numeric vector of predicted probabilities on eval split (0 to 1)
 #' @param y_eval Numeric vector of ground truth on eval split (0=incorrect, 1=correct)
-#' @param item_id_eval Integer vector of item identifiers for eval observations
-#' @param student_id_eval Integer vector of student identifiers for eval observations.
-#'   Required for student-weighted averaging.
+#' @param item_id_eval Vector of item identifiers for eval observations
+#'   (integer, numeric, character, or factor)
+#' @param student_id_eval Vector of student identifiers for eval observations
+#'   (integer, numeric, character, or factor). Required for student-weighted
+#'   averaging.
 #' @param y_train Numeric vector of ground truth on train split (0=incorrect, 1=correct)
-#' @param item_id_train Integer vector of item identifiers for train observations
+#' @param item_id_train Vector of item identifiers for train observations
+#'   (integer, numeric, character, or factor)
 #' @param eps Small constant for clipping probabilities (default: 1e-12)
 #' @param use_shrinkage Logical, if TRUE apply EB shrinkage to item baselines (default: TRUE)
 #' @param alpha Prior pseudo-count for successes in EB shrinkage (default: 2.0)
@@ -485,7 +498,7 @@ fractional_information_gain_confidence <- function(
 #'   - fig_v_pooled: Observation-weighted FIG-V (scalar)
 #'   - fig_v: Student-weighted FIG-V (scalar)
 #'   - fig_v_by_student: Per-student FIG-V values (named numeric vector)
-#'   - student_ids: Unique student IDs in sorted order (integer vector)
+#'   - student_ids: Unique student IDs in sorted order, in their input type
 #'   - calibration: Calibration metrics if calibration=TRUE, otherwise NULL
 #'
 #' @details
@@ -584,7 +597,7 @@ fractional_information_gain_validation <- function(
     fig_v_pooled = fig_result$fig_pooled,
     fig_v = fig_result$fig,
     fig_v_by_student = fig_result$fig_by_student,
-    student_ids = as.integer(names(fig_result$fig_by_student)),
+    student_ids = fig_result$student_ids,
     calibration = NULL
   )
 

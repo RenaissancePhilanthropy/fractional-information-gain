@@ -23,8 +23,10 @@ test_that("validate_and_prepare_inputs works with valid inputs", {
   expect_length(result, 6)
   expect_type(result$y_pred_eval, "double")
   expect_type(result$y_eval, "double")
-  expect_type(result$item_id_eval, "integer")
-  expect_type(result$student_id_eval, "integer")
+  # IDs are returned in their input type (numeric literals are "double" in R)
+  # rather than coerced to integer.
+  expect_type(result$item_id_eval, "double")
+  expect_type(result$student_id_eval, "double")
 })
 
 test_that("validate_and_prepare_inputs clips probabilities", {
@@ -1081,28 +1083,25 @@ test_that("FIG-V returns per-student values with consistent student_ids", {
 # Tests for input validation: non-integer IDs and empty inputs
 # ==============================================================================
 
-test_that("non-integer IDs raise a clear error", {
-  base_args <- list(
-    y_pred_eval = c(0.8, 0.6),
-    y_eval = c(1, 0),
-    item_id_eval = c(1, 2),
-    student_id_eval = c(1, 1),
-    y_train = c(1, 0),
-    item_id_train = c(1, 2)
+test_that("NA identifiers raise a clear error", {
+  # IDs may now be any atomic type (integer, numeric, character, factor), but
+  # NA is rejected.
+  expect_error(
+    fractional_information_gain_validation(
+      y_pred_eval = c(0.8, 0.6), y_eval = c(1, 0),
+      item_id_eval = c(1, NA), student_id_eval = c(1, 1),
+      y_train = c(1, 0), item_id_train = c(1, 2)
+    ),
+    "must not contain NA"
   )
 
-  # Fractional item IDs would be silently truncated by as.integer(); error instead.
-  args <- base_args
-  args$item_id_eval <- c(1.5, 2.5)
   expect_error(
-    do.call(fractional_information_gain_validation, args), "integer"
-  )
-
-  # Non-numeric student IDs would become NA; error instead.
-  args <- base_args
-  args$student_id_eval <- c("a", "b")
-  expect_error(
-    do.call(fractional_information_gain_validation, args), "integer"
+    fractional_information_gain_confidence(
+      y_pred_eval = c(0.8, 0.6),
+      item_id_eval = c("A", "B"), student_id_eval = c("s1", NA),
+      y_train = c(1, 0), item_id_train = c("A", "B")
+    ),
+    "must not contain NA"
   )
 })
 
@@ -1129,4 +1128,112 @@ test_that("empty inputs raise an error (FIG-V and FIG-C)", {
     ),
     "empty"
   )
+})
+
+# ==============================================================================
+# Tests for non-integer identifiers: results are invariant to ID type
+# ==============================================================================
+#
+# Relabeling students/items (e.g. 1 -> "id1") must not change any FIG value,
+# only the labels. Each test (a) anchors correctness with hand-computed values
+# on the integer representation, then (b) checks the double and character
+# representations give identical results, and (c) checks student_ids reflect the
+# input type. The label map paste0("id", i) is order-preserving for single
+# digits, so fig_*_by_student aligns positionally across representations.
+
+# Each entry relabels a vector of canonical integer indices into a given type.
+id_reps <- list(
+  integer   = as.integer,
+  double    = as.double,
+  character = function(ix) paste0("id", ix)
+)
+
+test_that("FIG-V results are invariant to ID type (int/double/string)", {
+  # Canonical integer indices; students out of order to exercise sorting.
+  y_pred  <- c(0.9, 0.2, 0.8, 0.1, 0.7, 0.3)
+  y_eval  <- c(1,   0,   1,   0,   1,   0  )
+  item_ix <- c(1, 1, 2, 2, 1, 2)
+  stud_ix <- c(3, 1, 2, 3, 1, 2)
+  y_train <- c(1, 0, 1, 0)
+  itr_ix  <- c(1, 1, 2, 2)
+
+  results <- lapply(id_reps, function(relabel) {
+    fractional_information_gain_validation(
+      y_pred_eval = y_pred, y_eval = y_eval,
+      item_id_eval = relabel(item_ix), student_id_eval = relabel(stud_ix),
+      y_train = y_train, item_id_train = relabel(itr_ix),
+      use_shrinkage = FALSE
+    )
+  })
+
+  # (a) Correctness: integer rep matches hand-computed per-student values.
+  # use_shrinkage = FALSE -> both items have baseline 0.5 -> entropy log(2).
+  bce <- function(y, p) -(y * log(p) + (1 - y) * log(1 - p))
+  l2 <- log(2)
+  expected <- c(
+    1 - (bce(0, 0.2) + bce(1, 0.7)) / (2 * l2),  # student 1: obs 2, 5
+    1 - (bce(1, 0.8) + bce(0, 0.3)) / (2 * l2),  # student 2: obs 3, 6
+    1 - (bce(1, 0.9) + bce(0, 0.1)) / (2 * l2)   # student 3: obs 1, 4
+  )
+  expect_equal(
+    as.numeric(results$integer$fig_v_by_student), expected, tolerance = 1e-10
+  )
+
+  # (b) Invariance: double and character reps give identical values.
+  ref <- results$integer
+  for (nm in c("double", "character")) {
+    expect_equal(results[[nm]]$fig_v_pooled, ref$fig_v_pooled, tolerance = 1e-12)
+    expect_equal(results[[nm]]$fig_v, ref$fig_v, tolerance = 1e-12)
+    expect_equal(
+      as.numeric(results[[nm]]$fig_v_by_student),
+      as.numeric(ref$fig_v_by_student),
+      tolerance = 1e-12
+    )
+  }
+
+  # (c) student_ids reflect the input type and sorted labels.
+  expect_identical(results$integer$student_ids, 1:3)
+  expect_identical(results$character$student_ids, c("id1", "id2", "id3"))
+})
+
+test_that("FIG-C results are invariant to ID type (int/double/string)", {
+  y_pred  <- c(0.9, 0.2, 0.8, 0.3)
+  item_ix <- c(1, 1, 2, 2)
+  stud_ix <- c(2, 1, 2, 1)
+  y_train <- c(1, 0, 1, 0)
+  itr_ix  <- c(1, 1, 2, 2)
+
+  results <- lapply(id_reps, function(relabel) {
+    fractional_information_gain_confidence(
+      y_pred_eval = y_pred, item_id_eval = relabel(item_ix),
+      student_id_eval = relabel(stud_ix), y_train = y_train,
+      item_id_train = relabel(itr_ix), use_shrinkage = FALSE
+    )
+  })
+
+  # (a) Correctness: baseline 0.5 -> entropy log(2).
+  l2 <- log(2)
+  expected <- c(
+    1 - (binary_entropy(0.2) + binary_entropy(0.3)) / (2 * l2),  # student 1: obs 2, 4
+    1 - (binary_entropy(0.9) + binary_entropy(0.8)) / (2 * l2)   # student 2: obs 1, 3
+  )
+  expect_equal(
+    as.numeric(results$integer$fig_c_by_student), expected, tolerance = 1e-10
+  )
+
+  # (b) Invariance across representations.
+  ref <- results$integer
+  for (nm in c("double", "character")) {
+    expect_equal(results[[nm]]$fig_c_pooled, ref$fig_c_pooled, tolerance = 1e-12)
+    expect_equal(results[[nm]]$fig_c, ref$fig_c, tolerance = 1e-12)
+    expect_equal(
+      as.numeric(results[[nm]]$fig_c_by_student),
+      as.numeric(ref$fig_c_by_student),
+      tolerance = 1e-12
+    )
+  }
+
+  # (c) student_ids reflect the input type.
+  expect_identical(results$integer$student_ids, 1:2)
+  expect_identical(results$character$student_ids, c("id1", "id2"))
 })
