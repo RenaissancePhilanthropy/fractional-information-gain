@@ -108,19 +108,39 @@ test_that("validate_and_prepare_inputs errors on out-of-range predictions", {
   )
 })
 
-test_that("validate_and_prepare_inputs errors on NaN predictions", {
-  y_pred <- c(0.8, NaN, 0.7)
-  y_eval <- c(1, 0, 1)
-  item_id_eval <- c(1, 2, 1)
-  student_id_eval <- c(1, 1, 2)
-  y_train <- c(1, 0)
-  item_id_train <- c(1, 2)
-
-  expect_error(
-    validate_and_prepare_inputs(
-      y_pred, y_eval, item_id_eval, student_id_eval, y_train, item_id_train
-    )
+test_that("non-finite predictions give a clear NaN/inf error (FIG-V validator)", {
+  # Regression guard: the finiteness check must run before the range check, so
+  # NaN does not trigger R's cryptic "missing value where TRUE/FALSE needed"
+  # (from comparing NaN with <), and Inf is reported as non-finite rather than
+  # as out-of-range.
+  base <- list(
+    y_eval = c(1, 0, 1), item_id_eval = c(1, 2, 1),
+    student_id_eval = c(1, 1, 2), y_train = c(1, 0), item_id_train = c(1, 2)
   )
+  for (bad in c(NaN, Inf, -Inf)) {
+    expect_error(
+      do.call(
+        validate_and_prepare_inputs,
+        c(list(y_pred_eval = c(0.8, bad, 0.7)), base)
+      ),
+      "NaN or inf"
+    )
+  }
+})
+
+test_that("non-finite predictions give a clear NaN/inf error (FIG-C)", {
+  for (bad in c(NaN, Inf, -Inf)) {
+    expect_error(
+      fractional_information_gain_confidence(
+        y_pred_eval = c(0.8, bad, 0.7),
+        item_id_eval = c(1, 2, 1),
+        student_id_eval = c(1, 1, 2),
+        y_train = c(1, 0),
+        item_id_train = c(1, 2)
+      ),
+      "NaN or inf"
+    )
+  }
 })
 
 # ==============================================================================
