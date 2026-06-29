@@ -1,0 +1,60 @@
+# Publish to PyPI via Trusted Publishing (OIDC) -- no API token is stored.
+#
+# USAGE:
+#   * Real release: publish a GitHub Release (tag e.g. v0.1.0) -> uploads to PyPI.
+#   * Dry run:      Actions -> "Publish" -> "Run workflow" -> uploads to TestPyPI.
+#   Bump `version` in pyproject.toml before each release (single source of truth).
+
+name: Publish
+
+on:
+  release:
+    types: [published]   # real release -> PyPI
+  workflow_dispatch:     # manual dry run -> TestPyPI
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - name: Build sdist and wheel
+        run: uv build
+      - name: Check distribution metadata
+        run: uvx twine check dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  # Dry run: manual trigger publishes to TestPyPI.
+  publish-testpypi:
+    needs: build
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    environment: testpypi
+    permissions:
+      id-token: write      # required to mint the OIDC token; nothing else needed
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+  # Real release: a published GitHub Release publishes to PyPI.
+  publish-pypi:
+    needs: build
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write      # required to mint the OIDC token; nothing else needed
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1

@@ -1,6 +1,6 @@
 Package: figmetric
 Title: Fractional Information Gain Metrics
-Version: 0.1.0
+Version: 1.0.0
 Authors@R: person("Tom", "DHF", role = c("aut", "cre"), email = "tom@example.com")
 Description: Computes Fractional Information Gain Validation (FIG-V) and
     Fractional Information Gain Confidence (FIG-C) metrics for evaluating
