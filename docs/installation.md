@@ -7,19 +7,22 @@
 
 For the differentiable PyTorch implementation, PyTorch 2.10+ is also required.
 
-## Install from GitHub
-
-!!! note
-    The package is not yet on PyPI. For now, install directly from GitHub.
+## Install
 
 ```bash
-pip install git+https://github.com/RenaissancePhilanthropy/fractional-information-gain.git
+pip install fractional-information-gain
 ```
 
 With PyTorch support (for differentiable loss functions):
 
 ```bash
-pip install "fractional-information-gain[torch] @ git+https://github.com/RenaissancePhilanthropy/fractional-information-gain.git"
+pip install "fractional-information-gain[torch]"
+```
+
+To install the latest development version directly from GitHub instead:
+
+```bash
+pip install git+https://github.com/RenaissancePhilanthropy/fractional-information-gain.git
 ```
 
 ## Import Name
