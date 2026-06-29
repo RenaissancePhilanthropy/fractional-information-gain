@@ -8,53 +8,83 @@
 #' - FIG-C (Confidence): No ground truth needed, uses entropy (model confidence)
 #'
 #' @author Tom DHF
-#' @version 1.1.0
 
-# Helper function to check if a value is in a set
-`%in_set%` <- function(x, set) {
-  all(x %in% set)
-}
-
-#' Validate and Prepare Inputs
+#' Validate an identifier vector
 #'
-#' Validates inputs and prepares data for FIG-V computation.
+#' Item and student identifiers may be of any atomic type (integer, numeric, or
+#' character) or a factor (coerced to character). Missing values are rejected;
+#' otherwise the vector is returned unchanged, preserving its type so that
+#' student IDs round-trip to the output in their original form.
 #'
-#' @param y_pred_eval Numeric vector of predicted probabilities (0 to 1)
-#' @param y_eval Numeric vector of ground truth (0=incorrect, 1=correct)
-#' @param item_id_eval Integer vector of item IDs for eval
-#' @param student_id_eval Integer vector of student IDs for eval
-#' @param y_train Numeric vector of training ground truth (0=incorrect, 1=correct)
-#' @param item_id_train Integer vector of item IDs for training
-#' @param eps Small constant for clipping probabilities (default: 1e-12)
+#' @param x Identifier vector
+#' @param arg_name Name of the argument, used in the error message
 #'
-#' @return A list containing validated and prepared vectors
+#' @return The identifier vector, with factors coerced to character
 #'
 #' @keywords internal
-validate_and_prepare_inputs <- function(y_pred_eval, y_eval, item_id_eval,
+validate_ids <- function(x, arg_name) {
+  if (is.factor(x)) {
+    x <- as.character(x)
+  }
+  if (!is.atomic(x)) {
+    stop(sprintf("%s must be an atomic vector of identifiers", arg_name))
+  }
+  if (anyNA(x)) {
+    stop(sprintf("%s must not contain NA", arg_name))
+  }
+  x
+}
+
+#' Validate and Prepare Eval Inputs
+#'
+#' Validates and prepares the evaluation inputs shared by FIG-V and FIG-C.
+#' Ground truth (\code{y_eval}) is optional: supply it for FIG-V, where it is
+#' validated and returned; leave it NULL for FIG-C. The number of eval
+#' observations is defined by \code{y_pred_eval}.
+#'
+#' @param y_pred_eval Numeric vector of predicted probabilities (0 to 1)
+#' @param y_eval Numeric vector of eval ground truth (0=incorrect, 1=correct),
+#'   or NULL (the default) for FIG-C
+#' @param item_id_eval Vector of item identifiers for eval (integer, numeric,
+#'   character, or factor)
+#' @param student_id_eval Vector of student identifiers for eval (integer,
+#'   numeric, character, or factor)
+#' @param y_train Numeric vector of training ground truth (0=incorrect, 1=correct)
+#' @param item_id_train Vector of item identifiers for training (integer,
+#'   numeric, character, or factor)
+#' @param eps Small constant for clipping probabilities (default: 1e-12)
+#'
+#' @return A list of the validated, prepared vectors. Contains \code{y_eval}
+#'   only when it was supplied.
+#'
+#' @keywords internal
+validate_and_prepare_inputs <- function(y_pred_eval, y_eval = NULL, item_id_eval,
                                          student_id_eval, y_train, item_id_train,
                                          eps = 1e-12) {
-  # Convert to numeric vectors and flatten
+  # Convert to numeric vectors / integer IDs.
   y_pred_eval <- as.numeric(y_pred_eval)
-  y_eval <- as.numeric(y_eval)
-  item_id_eval <- as.integer(item_id_eval)
-  student_id_eval <- as.integer(student_id_eval)
+  item_id_eval <- validate_ids(item_id_eval, "item_id_eval")
+  student_id_eval <- validate_ids(student_id_eval, "student_id_eval")
   y_train <- as.numeric(y_train)
-  item_id_train <- as.integer(item_id_train)
+  item_id_train <- validate_ids(item_id_train, "item_id_train")
 
-  # Length checks
-  n_eval <- length(y_eval)
+  # The number of eval observations is defined by the predictions.
+  n_eval <- length(y_pred_eval)
   n_train <- length(y_train)
 
-  if (length(y_pred_eval) != n_eval) {
-    stop(sprintf("Length mismatch: y_pred_eval (%d) != y_eval (%d)",
-                 length(y_pred_eval), n_eval))
+  if (n_eval == 0) {
+    stop("y_pred_eval must not be empty")
   }
+  if (n_train == 0) {
+    stop("y_train must not be empty")
+  }
+
   if (length(item_id_eval) != n_eval) {
-    stop(sprintf("Length mismatch: item_id_eval (%d) != y_eval (%d)",
+    stop(sprintf("Length mismatch: item_id_eval (%d) != y_pred_eval (%d)",
                  length(item_id_eval), n_eval))
   }
   if (length(student_id_eval) != n_eval) {
-    stop(sprintf("Length mismatch: student_id_eval (%d) != y_eval (%d)",
+    stop(sprintf("Length mismatch: student_id_eval (%d) != y_pred_eval (%d)",
                  length(student_id_eval), n_eval))
   }
   if (length(item_id_train) != n_train) {
@@ -62,40 +92,54 @@ validate_and_prepare_inputs <- function(y_pred_eval, y_eval, item_id_eval,
                  length(item_id_train), n_train))
   }
 
-  # Value checks
+  # Training labels must be binary.
   valid_values <- c(0, 1)
-  unique_eval <- unique(y_eval)
   unique_train <- unique(y_train)
-
-  if (!all(unique_eval %in% valid_values)) {
-    invalid <- setdiff(unique_eval, valid_values)
-    stop(sprintf("y_eval contains invalid values: %s. Must be in {0, 1}",
-                 paste(invalid, collapse = ", ")))
-  }
   if (!all(unique_train %in% valid_values)) {
     invalid <- setdiff(unique_train, valid_values)
     stop(sprintf("y_train contains invalid values: %s. Must be in {0, 1}",
                  paste(invalid, collapse = ", ")))
   }
 
-  if (any(y_pred_eval < 0) || any(y_pred_eval > 1)) {
-    stop("y_pred_eval must be in [0, 1]")
-  }
+  # Check finiteness before the range comparison: comparing NaN with < or >
+  # yields NA, so the range check would otherwise raise R's cryptic
+  # "missing value where TRUE/FALSE needed" instead of a clear message.
   if (any(!is.finite(y_pred_eval))) {
     stop("y_pred_eval contains NaN or inf values")
   }
+  if (any(y_pred_eval < 0) || any(y_pred_eval > 1)) {
+    stop("y_pred_eval must be in [0, 1]")
+  }
 
-  # Clip probabilities
+  # Clip probabilities.
   y_pred_eval <- pmax(pmin(y_pred_eval, 1 - eps), eps)
 
-  list(
+  result <- list(
     y_pred_eval = y_pred_eval,
-    y_eval = y_eval,
     item_id_eval = item_id_eval,
     student_id_eval = student_id_eval,
     y_train = y_train,
     item_id_train = item_id_train
   )
+
+  # FIG-V additionally supplies and validates ground-truth labels; FIG-C omits
+  # them and this block is skipped.
+  if (!is.null(y_eval)) {
+    y_eval <- as.numeric(y_eval)
+    if (length(y_eval) != n_eval) {
+      stop(sprintf("Length mismatch: y_eval (%d) != y_pred_eval (%d)",
+                   length(y_eval), n_eval))
+    }
+    unique_eval <- unique(y_eval)
+    if (!all(unique_eval %in% valid_values)) {
+      invalid <- setdiff(unique_eval, valid_values)
+      stop(sprintf("y_eval contains invalid values: %s. Must be in {0, 1}",
+                   paste(invalid, collapse = ", ")))
+    }
+    result$y_eval <- y_eval
+  }
+
+  result
 }
 
 #' Compute Per-Item Baseline
@@ -104,46 +148,36 @@ validate_and_prepare_inputs <- function(y_pred_eval, y_eval, item_id_eval,
 #' optional Empirical Bayes shrinkage.
 #'
 #' @param y_train Numeric vector of binary training outcomes (0 or 1)
-#' @param item_id_train Integer vector of item IDs for training data
+#' @param item_id_train Vector of item identifiers for training data (integer,
+#'   numeric, character, or factor)
 #' @param use_shrinkage Logical, whether to apply EB shrinkage (default: TRUE)
 #' @param alpha Prior pseudo-count for successes in EB shrinkage (default: 2.0)
 #' @param beta Prior pseudo-count for failures in EB shrinkage (default: 2.0)
 #'
 #' @return A list with:
-#'   - baseline_lookup: named list mapping item_id to baseline probability
+#'   - baseline_lookup: named numeric vector mapping item_id (as character) to
+#'     its baseline probability
 #'   - global_mean: overall mean correctness
 #'
 #' @keywords internal
 compute_item_baseline <- function(y_train, item_id_train,
                                    use_shrinkage = TRUE,
                                    alpha = 2.0, beta = 2.0) {
-  # Compute global mean
+  # Global mean correctness; used as the fallback for items unseen in training.
   global_mean <- mean(y_train)
 
-  # Get unique items
-  unique_items <- unique(item_id_train)
-
-  # Compute per-item statistics using tapply for efficiency
+  # Per-item statistics as named numeric vectors, indexed by item ID coerced to
+  # a character string. tapply() names are the sorted unique training item IDs.
   item_sums <- tapply(y_train, item_id_train, sum)
   item_counts <- tapply(y_train, item_id_train, length)
 
-  baseline_lookup <- list()
-  for (item in unique_items) {
-    item_str <- as.character(item)
-    n_successes <- item_sums[item_str]
-    n_total <- item_counts[item_str]
-
-    if (use_shrinkage) {
-      # Empirical Bayes shrinkage: (successes + alpha) / (total + alpha + beta)
-      baseline_lookup[[item_str]] <- (n_successes + alpha) / (n_total + alpha + beta)
-    } else {
-      # Simple mean
-      if (n_total > 0) {
-        baseline_lookup[[item_str]] <- n_successes / n_total
-      } else {
-        baseline_lookup[[item_str]] <- global_mean
-      }
-    }
+  if (use_shrinkage) {
+    # Empirical Bayes shrinkage: (successes + alpha) / (total + alpha + beta)
+    baseline_lookup <- (item_sums + alpha) / (item_counts + alpha + beta)
+  } else {
+    # Simple per-item mean. Every item present here has at least one
+    # observation, so the denominator is always positive.
+    baseline_lookup <- item_sums / item_counts
   }
 
   list(
@@ -156,8 +190,10 @@ compute_item_baseline <- function(y_train, item_id_train,
 #'
 #' Creates a vector of baseline probabilities for evaluation items.
 #'
-#' @param item_id_eval Integer vector of item IDs for evaluation data
-#' @param baseline_probs Named list mapping item_id to baseline probability
+#' @param item_id_eval Vector of item identifiers for evaluation data (integer,
+#'   numeric, character, or factor)
+#' @param baseline_probs Named numeric vector mapping item_id (as character) to
+#'   its baseline probability
 #' @param global_mean Fallback value for items not in lookup
 #' @param eps Small constant for clipping (default: 1e-12)
 #'
@@ -171,15 +207,9 @@ map_item_baseline <- function(item_id_eval, baseline_probs, global_mean,
     return(numeric(0))
   }
 
-  # Vectorized lookup with fallback to global mean
-  baseline_prob_vector <- sapply(item_id_eval, function(item) {
-    item_str <- as.character(item)
-    if (item_str %in% names(baseline_probs)) {
-      baseline_probs[[item_str]]
-    } else {
-      global_mean
-    }
-  })
+  # Vectorized lookup; items absent from the baseline fall back to global_mean.
+  baseline_prob_vector <- baseline_probs[as.character(item_id_eval)]
+  baseline_prob_vector[is.na(baseline_prob_vector)] <- global_mean
 
   # Clip values
   baseline_prob_vector <- pmax(pmin(baseline_prob_vector, 1 - eps), eps)
@@ -216,7 +246,7 @@ check_calibration <- function(y_pred, y_true, n_bins = 10, warn_threshold = 0.1)
   bin_confs <- c()
   bin_counts <- c()
 
-  for (bin_idx in 1:n_bins) {
+  for (bin_idx in seq_len(n_bins)) {
     in_bin <- bin_indices == bin_idx
     if (sum(in_bin) > 0) {
       bin_acc <- mean(y_true[in_bin])
@@ -257,75 +287,61 @@ binary_entropy <- function(p) {
 }
 
 
-#' Validate and Prepare Inputs for FIG-C
+#' Aggregate per-observation entropies into pooled and per-student FIG
 #'
-#' Validates inputs and prepares data for FIG-C computation.
-#' Similar to validate_and_prepare_inputs but doesn't require y_eval.
+#' Shared aggregation core used by both FIG-C and FIG-V. The two variants differ
+#' only in how \code{numerator} is computed: FIG-C uses the binary entropy of
+#' model predictions; FIG-V uses the binary cross-entropy of predictions against
+#' ground truth.
 #'
-#' @param y_pred_eval Numeric vector of predicted probabilities (0 to 1)
-#' @param item_id_eval Integer vector of item IDs for eval
-#' @param student_id_eval Integer vector of student IDs for eval
-#' @param y_train Numeric vector of training ground truth (0=incorrect, 1=correct)
-#' @param item_id_train Integer vector of item IDs for training
-#' @param eps Small constant for clipping probabilities (default: 1e-12)
+#' @param numerator Numeric vector of per-observation numerators (entropy for
+#'   FIG-C, cross-entropy for FIG-V)
+#' @param entropy_baseline Numeric vector of per-observation baseline entropies
+#' @param student_id_eval Vector of student identifiers for eval observations
+#'   (integer, numeric, character, or factor)
+#' @param metric_name Name used in warning messages, e.g. "FIG-C" or "FIG-V"
 #'
-#' @return A list containing validated and prepared vectors
+#' @return A list with:
+#'   - fig_pooled: observation-weighted FIG (scalar)
+#'   - fig: student-weighted FIG (scalar)
+#'   - fig_by_student: per-student FIG values (named numeric vector)
 #'
 #' @keywords internal
-validate_and_prepare_inputs_confidence <- function(y_pred_eval, item_id_eval,
-                                                    student_id_eval, y_train,
-                                                    item_id_train, eps = 1e-12) {
-  # Convert to appropriate types
-  y_pred_eval <- as.numeric(y_pred_eval)
-  item_id_eval <- as.integer(item_id_eval)
-  student_id_eval <- as.integer(student_id_eval)
-  y_train <- as.numeric(y_train)
-  item_id_train <- as.integer(item_id_train)
+compute_fig <- function(numerator, entropy_baseline, student_id_eval,
+                        metric_name) {
+  # Observation-weighted (pooled)
+  fig_pooled <- 1 - sum(numerator) / sum(entropy_baseline)
 
-  # Length checks
-  n_eval <- length(y_pred_eval)
-  n_train <- length(y_train)
+  # Student-weighted: per-student ratio of sums, then averaged across students.
+  # Group by an explicit factor whose level order is the (type-preserved)
+  # student_ids, so fig_by_student aligns with student_ids by construction.
+  student_ids <- sort(unique(student_id_eval))
+  student_f <- factor(student_id_eval, levels = as.character(student_ids))
+  student_numerator_sum <- tapply(numerator, student_f, sum)
+  student_baseline_sum <- tapply(entropy_baseline, student_f, sum)
+  fig_by_student <- 1 - (student_numerator_sum / student_baseline_sum)
+  fig <- mean(fig_by_student)
 
-  if (length(item_id_eval) != n_eval) {
-    stop(sprintf("Length mismatch: item_id_eval (%d) != y_pred_eval (%d)",
-                 length(item_id_eval), n_eval))
+  # Sanity checks
+  if (fig_pooled > 1 + 1e-6) {
+    warning(sprintf(
+      "%s pooled %.3f > 1; possible leakage or model issues.",
+      metric_name, fig_pooled
+    ))
   }
-  if (length(student_id_eval) != n_eval) {
-    stop(sprintf("Length mismatch: student_id_eval (%d) != y_pred_eval (%d)",
-                 length(student_id_eval), n_eval))
+  if (fig > 1 + 1e-6) {
+    warning(sprintf(
+      "%s %.3f > 1; possible leakage or model issues.",
+      metric_name, fig
+    ))
   }
-  if (length(item_id_train) != n_train) {
-    stop(sprintf("Length mismatch: item_id_train (%d) != y_train (%d)",
-                 length(item_id_train), n_train))
-  }
-
-  # Value checks for training data
-  valid_values <- c(0, 1)
-  unique_train <- unique(y_train)
-
-  if (!all(unique_train %in% valid_values)) {
-    invalid <- setdiff(unique_train, valid_values)
-    stop(sprintf("y_train contains invalid values: %s. Must be in {0, 1}",
-                 paste(invalid, collapse = ", ")))
-  }
-
-  # Value checks for predictions
-  if (any(y_pred_eval < 0) || any(y_pred_eval > 1)) {
-    stop("y_pred_eval must be in [0, 1]")
-  }
-  if (any(!is.finite(y_pred_eval))) {
-    stop("y_pred_eval contains NaN or inf values")
-  }
-
-  # Clip probabilities
-  y_pred_eval <- pmax(pmin(y_pred_eval, 1 - eps), eps)
 
   list(
-    y_pred_eval = y_pred_eval,
-    item_id_eval = item_id_eval,
-    student_id_eval = student_id_eval,
-    y_train = y_train,
-    item_id_train = item_id_train
+    fig_pooled = fig_pooled,
+    fig = fig,
+    fig_by_student = fig_by_student,
+    # Original type, sorted; aligns with fig_by_student by construction (above).
+    student_ids = student_ids
   )
 }
 
@@ -344,10 +360,13 @@ validate_and_prepare_inputs_confidence <- function(y_pred_eval, item_id_eval,
 #'   H_M(Y|X) = sum of binary entropies using model predictions (remaining uncertainty)
 #'
 #' @param y_pred_eval Numeric vector of predicted probabilities (0 to 1)
-#' @param item_id_eval Integer vector of item identifiers for eval observations
-#' @param student_id_eval Integer vector of student identifiers for eval observations
+#' @param item_id_eval Vector of item identifiers for eval observations
+#'   (integer, numeric, character, or factor)
+#' @param student_id_eval Vector of student identifiers for eval observations
+#'   (integer, numeric, character, or factor)
 #' @param y_train Numeric vector of ground truth on train split (0=incorrect, 1=correct)
-#' @param item_id_train Integer vector of item identifiers for train observations
+#' @param item_id_train Vector of item identifiers for train observations
+#'   (integer, numeric, character, or factor)
 #' @param eps Small constant for clipping probabilities (default: 1e-12)
 #' @param use_shrinkage Logical, if TRUE apply EB shrinkage to item baselines (default: TRUE)
 #' @param alpha Prior pseudo-count for successes in EB shrinkage (default: 2.0)
@@ -357,14 +376,15 @@ validate_and_prepare_inputs_confidence <- function(y_pred_eval, item_id_eval,
 #'   - fig_c_pooled: Observation-weighted FIG-C (scalar)
 #'   - fig_c: Student-weighted FIG-C (scalar)
 #'   - fig_c_by_student: Per-student FIG-C values (named numeric vector)
-#'   - student_ids: Unique student IDs (vector)
+#'   - student_ids: Unique student IDs in sorted order, in their input type
 #'
 #' @details
 #' FIG-C is based purely on model confidence (entropy), not accuracy.
 #' - FIG-C = 0 when model predictions match item base rates (no information gain)
 #' - FIG-C = 1 when model is perfectly confident (entropy = 0)
 #' - FIG-C can be negative if model adds uncertainty beyond the baseline
-#' - For well-calibrated models, FIG-C ≈ FIG-V in expectation
+#' - For well-calibrated models, FIG-C approximates FIG-V in expectation
+#' - Items in eval that do not appear in train use the global training mean as baseline
 #'
 #' @examples
 #' # Simple example: model confident about its predictions
@@ -395,10 +415,14 @@ fractional_information_gain_confidence <- function(
     alpha = 2.0,
     beta = 2.0
 ) {
-  # Validate and prepare inputs
-  validated <- validate_and_prepare_inputs_confidence(
-    y_pred_eval, item_id_eval, student_id_eval,
-    y_train, item_id_train, eps = eps
+  # Validate and prepare inputs (no y_eval: FIG-C needs no ground truth)
+  validated <- validate_and_prepare_inputs(
+    y_pred_eval = y_pred_eval,
+    item_id_eval = item_id_eval,
+    student_id_eval = student_id_eval,
+    y_train = y_train,
+    item_id_train = item_id_train,
+    eps = eps
   )
 
   y_pred_eval <- validated$y_pred_eval
@@ -426,36 +450,18 @@ fractional_information_gain_confidence <- function(
   # H_M(Y|X): Remaining uncertainty based on model predictions
   entropy_model <- binary_entropy(y_pred_eval)
 
-  # Observation-weighted FIG-C
-  fig_c_pooled <- 1 - sum(entropy_model) / sum(entropy_baseline)
-
-  # Student-weighted FIG-C
-  student_baseline_sum <- tapply(entropy_baseline, student_id_eval, sum)
-  student_model_sum <- tapply(entropy_model, student_id_eval, sum)
-
-  # Compute per-student FIG-C
-  fig_c_by_student <- 1 - (student_model_sum / student_baseline_sum)
-  fig_c <- mean(fig_c_by_student)
-
-  # Sanity checks
-  if (fig_c_pooled > 1 + 1e-6) {
-    warning(sprintf(
-      "FIG-C pooled %.3f > 1; model predictions may be pathological.",
-      fig_c_pooled
-    ))
-  }
-  if (fig_c > 1 + 1e-6) {
-    warning(sprintf(
-      "FIG-C %.3f > 1; model predictions may be pathological.",
-      fig_c
-    ))
-  }
+  fig_result <- compute_fig(
+    numerator = entropy_model,
+    entropy_baseline = entropy_baseline,
+    student_id_eval = student_id_eval,
+    metric_name = "FIG-C"
+  )
 
   list(
-    fig_c_pooled = fig_c_pooled,
-    fig_c = fig_c,
-    fig_c_by_student = fig_c_by_student,
-    student_ids = as.integer(names(fig_c_by_student))
+    fig_c_pooled = fig_result$fig_pooled,
+    fig_c = fig_result$fig,
+    fig_c_by_student = fig_result$fig_by_student,
+    student_ids = fig_result$student_ids
   )
 }
 
@@ -472,11 +478,14 @@ fractional_information_gain_confidence <- function(
 #'
 #' @param y_pred_eval Numeric vector of predicted probabilities on eval split (0 to 1)
 #' @param y_eval Numeric vector of ground truth on eval split (0=incorrect, 1=correct)
-#' @param item_id_eval Integer vector of item identifiers for eval observations
-#' @param student_id_eval Integer vector of student identifiers for eval observations.
-#'   Required for student-weighted averaging.
+#' @param item_id_eval Vector of item identifiers for eval observations
+#'   (integer, numeric, character, or factor)
+#' @param student_id_eval Vector of student identifiers for eval observations
+#'   (integer, numeric, character, or factor). Required for student-weighted
+#'   averaging.
 #' @param y_train Numeric vector of ground truth on train split (0=incorrect, 1=correct)
-#' @param item_id_train Integer vector of item identifiers for train observations
+#' @param item_id_train Vector of item identifiers for train observations
+#'   (integer, numeric, character, or factor)
 #' @param eps Small constant for clipping probabilities (default: 1e-12)
 #' @param use_shrinkage Logical, if TRUE apply EB shrinkage to item baselines (default: TRUE)
 #' @param alpha Prior pseudo-count for successes in EB shrinkage (default: 2.0)
@@ -488,7 +497,18 @@ fractional_information_gain_confidence <- function(
 #' @return A list containing:
 #'   - fig_v_pooled: Observation-weighted FIG-V (scalar)
 #'   - fig_v: Student-weighted FIG-V (scalar)
-#'   - calibration: (optional) Calibration metrics if calibration=TRUE
+#'   - fig_v_by_student: Per-student FIG-V values (named numeric vector)
+#'   - student_ids: Unique student IDs in sorted order, in their input type
+#'   - calibration: Calibration metrics if calibration=TRUE, otherwise NULL
+#'
+#' @details
+#' FIG-V uses cross-entropy against ground truth, so it rewards accurate
+#' predictions, not just confident ones.
+#' - FIG-V = 0 when model predictions match item base rates (no information gain)
+#' - FIG-V = 1 when model predictions are perfect (zero cross-entropy)
+#' - FIG-V can be negative if the model is worse than the baseline
+#' - FIG-V > 1 usually indicates data leakage; a warning is emitted when this happens
+#' - Items in eval that do not appear in train use the global training mean as baseline
 #'
 #' @examples
 #' # Simple example with 3 students, 2 items
@@ -525,10 +545,15 @@ fractional_information_gain_validation <- function(
     calib_n_bins = 10,
     calib_warn_threshold = 0.1
 ) {
-  # Validate and prepare inputs
+  # Validate and prepare inputs (y_eval supplied: FIG-V uses ground truth)
   validated <- validate_and_prepare_inputs(
-    y_pred_eval, y_eval, item_id_eval, student_id_eval,
-    y_train, item_id_train, eps = eps
+    y_pred_eval = y_pred_eval,
+    y_eval = y_eval,
+    item_id_eval = item_id_eval,
+    student_id_eval = student_id_eval,
+    y_train = y_train,
+    item_id_train = item_id_train,
+    eps = eps
   )
 
   y_pred_eval <- validated$y_pred_eval
@@ -547,11 +572,9 @@ fractional_information_gain_validation <- function(
 
   # Compute cross-entropy for model predictions (numerator)
   # BCE = -[y*log(p) + (1-y)*log(1-p)]
-  p_hat <- y_pred_eval
-
   ce_model <- -(
-    y_eval * log(p_hat) +
-      (1 - y_eval) * log(1 - p_hat)
+    y_eval * log(y_pred_eval) +
+      (1 - y_eval) * log(1 - y_pred_eval)
   )
 
   # Denominator: entropy of baseline (prior uncertainty) for Y items
@@ -561,37 +584,21 @@ fractional_information_gain_validation <- function(
   )
   entropy_baseline <- binary_entropy(baseline_probs_eval)
 
-  # Observation-weighted FIG-V
-  fig_v_interaction <- 1 - sum(ce_model) / sum(entropy_baseline)
+  fig_result <- compute_fig(
+    numerator = ce_model,
+    entropy_baseline = entropy_baseline,
+    student_id_eval = student_id_eval,
+    metric_name = "FIG-V"
+  )
 
-  # Student-weighted FIG-V
-  # Compute per-student sums using tapply
-  unique_students <- unique(student_id_eval)
-  student_model_sum <- tapply(ce_model, student_id_eval, sum)
-  student_baseline_sum <- tapply(entropy_baseline, student_id_eval, sum)
-
-  # Compute per-student FIG-V: ratio of sums per student
-  fig_v_by_student <- 1 - (student_model_sum / student_baseline_sum)
-  fig_v <- mean(fig_v_by_student)
-
-  # Sanity checks
-  if (fig_v_interaction > 1 + 1e-6) {
-    warning(sprintf(
-      "FIG-V interaction %.3f > 1; possible leakage or model issues.",
-      fig_v_interaction
-    ))
-  }
-  if (fig_v > 1 + 1e-6) {
-    warning(sprintf(
-      "FIG-V %.3f > 1; possible leakage or model issues.",
-      fig_v
-    ))
-  }
-
-  # Assemble result
+  # Assemble result. calibration is always present (NULL unless requested) to
+  # mirror the Python implementation's return shape.
   result <- list(
-    fig_v_pooled = fig_v_interaction,
-    fig_v = fig_v
+    fig_v_pooled = fig_result$fig_pooled,
+    fig_v = fig_result$fig,
+    fig_v_by_student = fig_result$fig_by_student,
+    student_ids = fig_result$student_ids,
+    calibration = NULL
   )
 
   # Optional calibration

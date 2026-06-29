@@ -15,6 +15,7 @@ from typing import Any
 import numpy as np
 import pytest
 from conftest import FigCInputs, FigVInputs
+from numpy.typing import ArrayLike
 
 from fig import (
     fractional_information_gain_confidence,
@@ -59,6 +60,39 @@ NUMPY_R_TOL = 1e-12
 # Tolerance for any comparison involving float32 (numpy vs PyTorch).
 # Tighter values risk spurious failures across CPU architectures.
 NUMPY_TORCH_TOL = 1e-6
+
+
+def _assert_per_student_match(
+    ids_ref: ArrayLike,
+    vals_ref: ArrayLike,
+    ids_other: ArrayLike,
+    vals_other: ArrayLike,
+    tol: float,
+    label: str,
+) -> None:
+    """Assert two (student_ids, per-student value) pairs agree.
+
+    Each side is aligned by sorting on its student_ids before comparison, so this
+    does not assume the two implementations emit students in the same order. Both
+    arrays are passed through ``np.atleast_1d`` so the single-student case (which
+    JSON auto-unboxes to a scalar on the R side) is handled.
+    """
+    ids_ref = np.atleast_1d(np.asarray(ids_ref, dtype=float))
+    ids_other = np.atleast_1d(np.asarray(ids_other, dtype=float))
+    vals_ref = np.atleast_1d(np.asarray(vals_ref, dtype=float))
+    vals_other = np.atleast_1d(np.asarray(vals_other, dtype=float))
+
+    np.testing.assert_array_equal(
+        np.sort(ids_ref),
+        np.sort(ids_other),
+        err_msg=f"{label}: student_ids differ ({ids_ref} vs {ids_other})",
+    )
+    np.testing.assert_allclose(
+        vals_ref[np.argsort(ids_ref)],
+        vals_other[np.argsort(ids_other)],
+        atol=tol,
+        err_msg=f"{label}: per-student values differ",
+    )
 
 
 def run_r_fig_v(
@@ -125,10 +159,13 @@ result <- fractional_information_gain_validation(
     calibration = FALSE
 )
 
-# Write output with full precision
+# Write output with full precision. as.numeric() strips the names from the
+# per-student vector so it serialises as a plain array aligned with student_ids.
 output_data <- list(
     fig_v = result$fig_v,
-    fig_v_pooled = result$fig_v_pooled
+    fig_v_pooled = result$fig_v_pooled,
+    fig_v_by_student = as.numeric(result$fig_v_by_student),
+    student_ids = result$student_ids
 )
 write_json(output_data, "{output_file}", auto_unbox = TRUE, digits = 17)
 """
@@ -216,10 +253,13 @@ result <- fractional_information_gain_confidence(
     eps = input_data$eps
 )
 
-# Write output with full precision
+# Write output with full precision. as.numeric() strips the names from the
+# per-student vector so it serialises as a plain array aligned with student_ids.
 output_data <- list(
     fig_c = result$fig_c,
-    fig_c_pooled = result$fig_c_pooled
+    fig_c_pooled = result$fig_c_pooled,
+    fig_c_by_student = as.numeric(result$fig_c_by_student),
+    student_ids = result$student_ids
 )
 write_json(output_data, "{output_file}", auto_unbox = TRUE, digits = 17)
 """
@@ -607,6 +647,67 @@ class TestCrossLanguageConsistency:
                 < NUMPY_R_TOL
             )
 
+    @pytest.mark.parametrize(
+        "data_fixture",
+        ["simple_test_data", "larger_test_data", "edge_case_data"],
+    )
+    @pytest.mark.parametrize(
+        ("backend", "tol"),
+        [
+            pytest.param(
+                "R",
+                NUMPY_R_TOL,
+                marks=pytest.mark.skipif(not HAS_R, reason="R not available"),
+            ),
+            pytest.param(
+                "torch",
+                NUMPY_TORCH_TOL,
+                marks=pytest.mark.skipif(not HAS_TORCH, reason="PyTorch not available"),
+            ),
+        ],
+    )
+    def test_fig_v_per_student_parity(
+        self,
+        data_fixture: str,
+        backend: str,
+        tol: float,
+        request: pytest.FixtureRequest,
+    ) -> None:
+        """numpy agrees with R and PyTorch on per-student FIG-V and student_ids.
+
+        Covers the scenario x backend matrix. This is the regression guard for
+        FIG-V's per-student outputs: before they were returned, the other side had
+        nothing to compare against and this would fail on a shape mismatch.
+        """
+        data: FigVInputs = request.getfixturevalue(data_fixture)
+        result_numpy = fractional_information_gain_validation(
+            **data, use_shrinkage=True, calibration=False
+        )
+        if backend == "R":
+            result_r = run_r_fig_v(**data, use_shrinkage=True)
+            other_ids = result_r["student_ids"]
+            other_vals = result_r["fig_v_by_student"]
+        else:
+            torch_data: dict[str, Any] = {
+                k: torch.tensor(v) if isinstance(v, np.ndarray) else v  # pyright: ignore[reportPossiblyUnboundVariable, reportUnnecessaryIsInstance]
+                for k, v in data.items()
+            }
+            result_torch = fractional_information_gain_validation_torch(
+                **torch_data,  # pyright: ignore[reportArgumentType]
+                use_shrinkage=True,
+                calibration=False,
+            )
+            other_ids = result_torch["student_ids"]
+            other_vals = result_torch["fig_v_by_student"].detach().cpu().numpy()
+        _assert_per_student_match(
+            result_numpy["student_ids"],
+            result_numpy["fig_v_by_student"],
+            other_ids,
+            other_vals,
+            tol,
+            f"FIG-V numpy vs {backend} ({data_fixture})",
+        )
+
 
 class TestCrossLanguageMultipleSeeds:
     """Run cross-language tests with multiple random seeds."""
@@ -757,6 +858,60 @@ class TestCrossLanguageConsistencyFigC:
         ), (
             f"fig_c_pooled mismatch: numpy={result_numpy['fig_c_pooled']}, "
             f"R={result_r['fig_c_pooled']}"
+        )
+
+    @pytest.mark.parametrize(
+        "data_fixture",
+        ["simple_test_data_fig_c", "larger_test_data_fig_c"],
+    )
+    @pytest.mark.parametrize(
+        ("backend", "tol"),
+        [
+            pytest.param(
+                "R",
+                NUMPY_R_TOL,
+                marks=pytest.mark.skipif(not HAS_R, reason="R not available"),
+            ),
+            pytest.param(
+                "torch",
+                NUMPY_TORCH_TOL,
+                marks=pytest.mark.skipif(not HAS_TORCH, reason="PyTorch not available"),
+            ),
+        ],
+    )
+    def test_fig_c_per_student_parity(
+        self,
+        data_fixture: str,
+        backend: str,
+        tol: float,
+        request: pytest.FixtureRequest,
+    ) -> None:
+        """numpy agrees with R and PyTorch on per-student FIG-C and student_ids.
+
+        Covers the scenario x backend matrix (regression guard for FIG-C's
+        per-student outputs).
+        """
+        data: FigCInputs = request.getfixturevalue(data_fixture)
+        result_numpy = fractional_information_gain_confidence(**data)
+        if backend == "R":
+            result_r = run_r_fig_c(**data)
+            other_ids = result_r["student_ids"]
+            other_vals = result_r["fig_c_by_student"]
+        else:
+            torch_data: dict[str, Any] = {
+                k: torch.tensor(v) if isinstance(v, np.ndarray) else v  # pyright: ignore[reportPossiblyUnboundVariable, reportUnnecessaryIsInstance]
+                for k, v in data.items()
+            }
+            result_torch = fractional_information_gain_confidence_torch(**torch_data)  # pyright: ignore[reportArgumentType]
+            other_ids = result_torch["student_ids"]
+            other_vals = result_torch["fig_c_by_student"].detach().cpu().numpy()
+        _assert_per_student_match(
+            result_numpy["student_ids"],
+            result_numpy["fig_c_by_student"],
+            other_ids,
+            other_vals,
+            tol,
+            f"FIG-C numpy vs {backend} ({data_fixture})",
         )
 
     @pytest.mark.skipif(not HAS_TORCH or not HAS_R, reason="PyTorch or R not available")
